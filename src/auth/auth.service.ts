@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -23,24 +24,49 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResult> {
-    const existing = await this.prisma.user.findUnique({
+    const existingByEmail = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
-    if (existing) {
+    if (existingByEmail) {
       throw new ConflictException(
         'Пользователь с таким email уже зарегистрирован.',
       );
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
-    const user = await this.prisma.user.create({
-      data: { email: dto.email, phone: dto.phone, passwordHash },
-    });
+    if (dto.phone) {
+      const existingByPhone = await this.prisma.user.findUnique({
+        where: { phone: dto.phone },
+      });
+      if (existingByPhone) {
+        throw new ConflictException(
+          'Пользователь с таким номером телефона уже зарегистрирован.',
+        );
+      }
+    }
 
-    return {
-      accessToken: this.signToken(user),
-      user: { id: user.id, email: user.email },
-    };
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+
+    try {
+      const user = await this.prisma.user.create({
+        data: { email: dto.email, phone: dto.phone, passwordHash },
+      });
+
+      return {
+        accessToken: this.signToken(user),
+        user: { id: user.id, email: user.email },
+      };
+    } catch (error) {
+      // Подстраховка от гонки между проверкой и записью — уникальность бьётся на уровне БД
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Пользователь с таким email или телефоном уже зарегистрирован.',
+        );
+      }
+      throw error;
+    }
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {
