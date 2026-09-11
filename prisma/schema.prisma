@@ -1,0 +1,134 @@
+// Prisma schema для MVP сервиса генерации документов (договоры/акты/счета для ИП/фрилансеров)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlanType {
+  FREE
+  PRO
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum ClientType {
+  INDIVIDUAL // физлицо
+  COMPANY    // юрлицо
+}
+
+enum DocumentType {
+  CONTRACT // договор оказания услуг
+  ACT      // акт выполненных работ
+  INVOICE  // счёт на оплату
+  OFFER    // оферта
+}
+
+enum DocumentStatus {
+  DRAFT
+  ISSUED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  phone        String?  @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  profile      Profile?
+  clients      Client[]
+  documents    Document[]
+  subscription Subscription?
+}
+
+// Реквизиты пользователя как ИП/самозанятого — заполняется один раз
+model Profile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id])
+
+  fullName    String   // ФИО или название ИП
+  inn         String?  // ИНН (может отсутствовать у части самозанятых)
+  bankName    String?
+  bankAccount String?
+  mfo         String?  // МФО банка
+  address     String?
+  logoUrl     String?
+  phone       String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Заказчики пользователя — чтобы не вводить заново при каждом документе
+model Client {
+  id        String     @id @default(uuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+
+  name      String
+  type      ClientType @default(INDIVIDUAL)
+  inn       String?
+  address   String?
+
+  documents Document[]
+  createdAt DateTime   @default(now())
+}
+
+model Template {
+  id           String       @id @default(uuid())
+  type         DocumentType
+  name         String
+  htmlTemplate String       @db.Text // HTML с плейсхолдерами {{field}}
+  version      Int          @default(1)
+  isActive     Boolean      @default(true)
+
+  documents    Document[]
+  createdAt    DateTime     @default(now())
+}
+
+model Document {
+  id             String         @id @default(uuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id])
+
+  clientId       String?
+  client         Client?        @relation(fields: [clientId], references: [id])
+
+  templateId     String
+  template       Template       @relation(fields: [templateId], references: [id])
+
+  type           DocumentType
+  data           Json           // все поля документа: сумма, услуга, срок и т.д.
+  pdfUrl         String?
+  documentNumber Int            // порядковый номер в рамках пользователя (генерируется в сервисе)
+  status         DocumentStatus @default(DRAFT)
+
+  createdAt      DateTime       @default(now())
+
+  @@index([userId, type])
+}
+
+model Subscription {
+  id                     String             @id @default(uuid())
+  userId                 String             @unique
+  user                   User               @relation(fields: [userId], references: [id])
+
+  plan                   PlanType           @default(FREE)
+  documentsUsedThisMonth Int                @default(0)
+  periodStart            DateTime           @default(now())
+  periodEnd              DateTime?
+  paymentProvider        String?            // "click" | "payme" | null для free
+  status                 SubscriptionStatus @default(ACTIVE)
+
+  updatedAt              DateTime           @updatedAt
+}
